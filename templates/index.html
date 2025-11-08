@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Scalper Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100">
+  <div class="max-w-6xl mx-auto p-4">
+    <header class="flex items-center justify-between mb-4">
+      <h1 class="text-2xl font-bold">Multi-Coin Pro Scalper — Dashboard</h1>
+      <div class="flex gap-2">
+        <button id="startBtn" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500">Start</button>
+        <button id="stopBtn" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500">Stop</button>
+      </div>
+    </header>
+
+    <section class="grid md:grid-cols-3 gap-4">
+      <div class="p-4 rounded-2xl bg-slate-900 shadow-lg">
+        <h2 class="text-lg font-semibold mb-2">Bot Status</h2>
+        <div class="space-y-1 text-sm">
+          <div>Running: <span id="running" class="font-mono">false</span></div>
+          <div>In Position: <span id="inpos" class="font-mono">false</span></div>
+          <div>Symbol: <span id="symbol" class="font-mono">—</span></div>
+          <div>Entry: <span id="entry" class="font-mono">—</span></div>
+          <div>Qty: <span id="qty" class="font-mono">—</span></div>
+        </div>
+      </div>
+
+      <div class="p-4 rounded-2xl bg-slate-900 shadow-lg">
+        <h2 class="text-lg font-semibold mb-2">PnL</h2>
+        <div class="text-sm space-y-1">
+          <div>Daily PnL (USDT): <span id="pnl_usdt" class="font-mono">0.00</span></div>
+          <div>Daily PnL (INR): <span id="pnl_inr" class="font-mono">0.00</span></div>
+          <div class="text-xs mt-2 opacity-70">
+            Paper mode: <b>{{ 'ON' if paper else 'OFF' }}</b>,
+            Capital/trade: <b>${{ capital }}</b>,
+            Fee/side: <b>{{ fee }}%</b>,
+            Max hold: <b>{{ max_hold }}s</b>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 rounded-2xl bg-slate-900 shadow-lg">
+        <h2 class="text-lg font-semibold mb-2">Top Scores</h2>
+        <div id="scores" class="text-sm space-y-1">
+          <div class="opacity-60">Waiting…</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-4 p-4 rounded-2xl bg-slate-900 shadow-lg">
+      <h2 class="text-lg font-semibold mb-2">Live Tickers (last mid)</h2>
+      <div id="tickers" class="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+    </section>
+
+    <section class="mt-4 p-4 rounded-2xl bg-slate-900 shadow-lg">
+      <h2 class="text-lg font-semibold mb-2">Event Log</h2>
+      <div id="log" class="text-xs font-mono h-56 overflow-auto bg-slate-950/50 rounded-xl p-3"></div>
+    </section>
+  </div>
+
+  <script>
+    const runningEl = document.getElementById('running');
+    const inposEl = document.getElementById('inpos');
+    const symbolEl = document.getElementById('symbol');
+    const entryEl = document.getElementById('entry');
+    const qtyEl = document.getElementById('qty');
+    const pnlU = document.getElementById('pnl_usdt');
+    const pnlI = document.getElementById('pnl_inr');
+    const logEl = document.getElementById('log');
+    const scoresEl = document.getElementById('scores');
+    const tickersEl = document.getElementById('tickers');
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+
+    startBtn.onclick = async () => {
+      await fetch('/start', {method: 'POST'});
+      refreshStatus();
+      addLog('UI', 'Start pressed');
+    };
+    stopBtn.onclick = async () => {
+      await fetch('/stop', {method: 'POST'});
+      refreshStatus();
+      addLog('UI', 'Stop pressed');
+    };
+
+    function addLog(tag, msg) {
+      const line = `[${new Date().toLocaleTimeString()}] ${tag}: ${msg}`;
+      logEl.textContent += line + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function refreshStatus() {
+      const r = await fetch('/status');
+      const s = await r.json();
+      runningEl.textContent = s.running;
+      inposEl.textContent = s.in_position;
+      symbolEl.textContent = s.pos_symbol || '—';
+      entryEl.textContent = s.entry_price || '—';
+      qtyEl.textContent = s.position_qty;
+      pnlU.textContent = s.daily_pnl_usdt;
+      pnlI.textContent = s.daily_pnl_inr;
+    }
+    refreshStatus();
+
+    // Live SSE
+    const es = new EventSource('/stream');
+    const lastMid = {};
+    es.onmessage = (e) => {
+      if (!e.data) return;
+      let obj = {};
+      try { obj = JSON.parse(e.data); } catch { return; }
+      if (!obj.payload) return;
+
+      const st = obj.state || {};
+      runningEl.textContent = true; // if we receive stream, it's running
+      inposEl.textContent = st.in_position;
+      symbolEl.textContent = st.pos_symbol || '—';
+      entryEl.textContent = st.entry_price || '—';
+      qtyEl.textContent = st.position_qty || '0';
+      pnlU.textContent = st.daily_pnl_usdt || '0.00';
+      pnlI.textContent = st.daily_pnl_inr || '0.00';
+
+      const p = obj.payload;
+      if (p.type === 'tick') {
+        lastMid[p.symbol] = p.mid;
+        renderTickers();
+      } else if (p.type === 'scores') {
+        renderScores(p.scores);
+      } else if (p.type === 'trade') {
+        addLog(p.symbol || 'TRADE', `${p.side} ${p.qty} @ ${p.price}` + (p.reason ? ` [${p.reason}]` : '') + (p.pnl ? ` PnL=${p.pnl}` : ''));
+      } else if (p.type === 'info') {
+        addLog('INFO', p.msg || '');
+      }
+    };
+
+    function renderTickers() {
+      tickersEl.innerHTML = '';
+      const keys = Object.keys(lastMid).sort();
+      for (const s of keys) {
+        const d = document.createElement('div');
+        d.className = 'p-3 rounded-xl bg-slate-800 flex justify-between';
+        d.innerHTML = `<span class="font-semibold">${s}</span><span class="font-mono">${Number(lastMid[s]).toFixed(6)}</span>`;
+        tickersEl.appendChild(d);
+      }
+    }
+    function renderScores(scores) {
+      if (!scores || !scores.length) return;
+      scoresEl.innerHTML = '';
+      for (const r of scores) {
+        const d = document.createElement('div');
+        d.className = 'flex justify-between bg-slate-800 rounded-xl px-3 py-1.5';
+        d.innerHTML = `<span>${r.symbol}</span><span class="font-mono">${r.score.toFixed(2)}</span>`;
+        scoresEl.appendChild(d);
+      }
+    }
+  </script>
+</body>
+</html>
