@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 import websockets
 
+os.system("python3 app.py")
 # Optional (LIVE only)
 try:
     from binance.client import Client as BinanceClient
@@ -448,6 +449,9 @@ async def ws_merged_listener():
             except Exception as e:
                 log(f"WS Error: {e}")
                 await asyncio.sleep(0.3)
+@app.get("/ping")
+def ping():
+    return {"alive": True}
 
 # ========= Dashboard =========
 app = FastAPI()
@@ -631,4 +635,7 @@ def main():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+
